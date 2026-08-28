@@ -1,0 +1,17 @@
+{
+  "name": "@sgp/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": { "sgp": "./dist/index.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@sgp/core": "workspace:*",
+    "cli-table3": "^0.6.5",
+    "commander": "^12.1.0",
+    "picocolors": "^1.1.1",
+    "dotenv": "^16.4.5"
+  }
+}

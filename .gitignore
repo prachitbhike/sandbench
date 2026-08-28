@@ -1,0 +1,16 @@
+node_modules/
+dist/
+
+# Secrets: ignore every .env variant, keep the template
+.env
+.env.*
+!.env.example
+.next/
+*.tsbuildinfo
+providers/modal_sidecar/.venv/
+__pycache__/
+results/*.json
+!results/.gitkeep
+
+# Generated benchmark dataset (recreated on demand)
+data/
