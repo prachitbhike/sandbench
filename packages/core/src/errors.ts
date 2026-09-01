@@ -1,14 +1,16 @@
-import type { ErrorRecord } from './types.js';
+import type { ErrorKind, ErrorRecord } from './types.js';
 
 /**
  * Turn anything thrown into a structured record. We never want a provider
  * SDK blowing up to kill the race — the failure IS data.
  */
 export function toErrorRecord(phase: string, err: unknown, iteration?: number): ErrorRecord {
+  const message = extractMessage(err);
   const rec: ErrorRecord = {
     phase,
-    message: extractMessage(err),
+    message,
     at: new Date().toISOString(),
+    kind: classifyError(err),
   };
   if (iteration !== undefined) rec.iteration = iteration;
   if (err instanceof Error) {
@@ -66,4 +68,41 @@ export function isRateLimit(err: unknown): boolean {
   if (status === 429) return true;
   if (msg.includes('429')) return true;
   return THROTTLE_PATTERNS.some((p) => msg.includes(p));
+}
+
+/**
+ * Coarse bucket for a failure.
+ *
+ * "3 errors" is not an answer an engineer can act on. Throttling means ask for
+ * a quota bump; transport errors mean the provider is flaky; auth means your
+ * key is wrong. Same count, three different Mondays.
+ */
+export function classifyError(err: unknown): ErrorKind {
+  if (isRateLimit(err)) return 'throttle';
+  const msg = extractMessage(err).toLowerCase();
+  const status = (err as { status?: number; statusCode?: number } | null)?.status
+    ?? (err as { statusCode?: number } | null)?.statusCode;
+
+  if (msg.includes('timed out') || msg.includes('timeout') || msg.includes('etimedout')) return 'timeout';
+  if (status === 401 || status === 403 || /unauthor|forbidden|invalid api key|authentication/.test(msg)) {
+    return 'auth';
+  }
+  if (status === 404 || /not found|unknown sandbox|no such/.test(msg)) return 'not-found';
+  if (/sandbox (was )?(killed|terminated|exited|died)|oom|container exited|sidecar exited/.test(msg)) {
+    return 'sandbox-died';
+  }
+  if (/econnreset|econnrefused|socket|network|fetch failed|enotfound|eai_again|stream|grpc|502|503|504/.test(msg)) {
+    return 'transport';
+  }
+  return 'other';
+}
+
+/** Roll a list of records into counts per kind, for the reliability column. */
+export function tallyErrorKinds(errors: ErrorRecord[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const e of errors) {
+    const k = e.kind ?? 'other';
+    out[k] = (out[k] ?? 0) + 1;
+  }
+  return out;
 }

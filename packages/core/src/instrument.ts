@@ -1,4 +1,5 @@
 import type {
+  CreateOptions,
   ErrorRecord,
   ExecOpts,
   ExecResult,
@@ -56,6 +57,15 @@ export class Recorder {
   }
 }
 
+export interface Acquisition {
+  handle: SandboxHandle;
+  /** Latency of the attempt that succeeded. */
+  coldStartMs: number;
+  /** Everything the caller waited through, failed attempts included. */
+  acquireMs: number;
+  attempts: number;
+}
+
 /**
  * Wraps a provider so every call is timed and every failure is recorded.
  *
@@ -76,10 +86,18 @@ export class InstrumentedProvider {
     return this.inner.supportsPersistence;
   }
 
-  /** Returns cold-start ms alongside the handle. Retries once. */
-  async createSandbox(template?: string): Promise<{ handle: SandboxHandle; coldStartMs: number }> {
+  /**
+   * Returns cold-start ms alongside the handle. Retries once.
+   *
+   * `acquireMs` is reported separately from `coldStartMs` because they answer
+   * different questions. If a provider stalls for 30s, fails, then succeeds in
+   * 100ms, its cold start was 100ms — and its user waited 30.1 seconds. Only
+   * recording the winning attempt would let a slow-failure mode disappear.
+   */
+  async createSandbox(opts?: CreateOptions): Promise<Acquisition> {
+    const wallStart = now();
     const attempt = async (): Promise<{ handle: SandboxHandle; coldStartMs: number }> => {
-      const { ms, value } = await timed(() => this.inner.createSandbox(template));
+      const { ms, value } = await timed(() => this.inner.createSandbox(opts));
       value.createdAt = Date.now();
       return { handle: value, coldStartMs: ms };
     };
@@ -87,13 +105,20 @@ export class InstrumentedProvider {
     try {
       const r = await attempt();
       this.rec.step('createSandbox', r.coldStartMs, true);
-      return r;
+      return { ...r, acquireMs: now() - wallStart, attempts: 1 };
     } catch (first) {
       this.rec.error('createSandbox', first);
       this.rec.retries += 1;
       const r = await attempt(); // single retry; if this throws the iteration fails
-      this.rec.step('createSandbox', r.coldStartMs, true, undefined, 'succeeded on retry');
-      return r;
+      const acquireMs = now() - wallStart;
+      this.rec.step(
+        'createSandbox',
+        r.coldStartMs,
+        true,
+        undefined,
+        `succeeded on retry — ${acquireMs}ms total to acquire`,
+      );
+      return { ...r, acquireMs, attempts: 2 };
     }
   }
 
@@ -140,6 +165,50 @@ export class InstrumentedProvider {
       this.rec.error('destroy', err);
     }
   }
+}
+
+const READY_TOKEN = '__SGP_READY__';
+
+/**
+ * Time until the sandbox will actually run something.
+ *
+ * `createSandbox()` returning is not the same event across SDKs: some return
+ * once the API accepts the request and finish booting lazily, others block
+ * until the container is live. Comparing those two numbers rewards whoever
+ * defers the most work into your first command. This measures the thing an
+ * agent actually waits for — create, then a command that echoes a token back.
+ */
+export async function measureReadiness(
+  provider: InstrumentedProvider,
+  handle: SandboxHandle,
+): Promise<number | null> {
+  const res = await provider.exec(
+    handle,
+    `echo ${READY_TOKEN}`,
+    { timeoutMs: 120_000 },
+    'probe:ready',
+  );
+  return res.stdout.includes(READY_TOKEN) ? res.durationMs : null;
+}
+
+/**
+ * Per-command round trip on an already-live sandbox.
+ *
+ * An agent loop issues dozens of commands per session, so this floor is
+ * multiplied by everything the agent does — frequently a bigger share of the
+ * user-visible wait than the one-time cold start it gets compared on.
+ */
+export async function measureExecRoundTrips(
+  provider: InstrumentedProvider,
+  handle: SandboxHandle,
+  count = 5,
+): Promise<number[]> {
+  const samples: number[] = [];
+  for (let i = 0; i < count; i++) {
+    const res = await provider.exec(handle, 'true', { timeoutMs: 60_000 }, `probe:exec-rtt-${i}`);
+    if (res.exitCode === 0) samples.push(res.durationMs);
+  }
+  return samples;
 }
 
 /** Seconds the sandbox billed as alive. Falls back to now() if destroy never set it. */

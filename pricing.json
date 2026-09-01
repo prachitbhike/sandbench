@@ -1,12 +1,23 @@
 {
-  "version": 1,
+  "version": 2,
   "_comment": [
-    "Edit these rates freely - cost math in results is derived from this file at race time.",
+    "Rates are read at race time - edit freely.",
     "cost = alive_seconds * (vcpus * usd_per_vcpu_hour + mem_gib * usd_per_gib_hour) / 3600",
-    "Set usd_per_gib_hour to 0 to bill CPU-only.",
-    "default_vcpus / default_mem_gib are ASSUMPTIONS about what each provider hands out.",
-    "Run `sgp race --task escape` to record the machine each provider actually delivers,",
-    "then calibrate these numbers - the cost column is only as good as they are."
+    "",
+    "vcpus/mem_gib are NOT taken from this file when anything better is known.",
+    "Resolution order, recorded per result as cost.basis:",
+    "  1. requested - the SDK let us pin cpu/memory AND the vendor bills on the request",
+    "  2. measured  - cgroup limits observed inside the sandbox by the environment probe",
+    "  3. assumed   - the default_* values below, i.e. nobody actually knows",
+    "The report and dashboard label assumed rows, because an assumed cost column",
+    "is a restatement of runtime, not a price.",
+    "",
+    "billed_on tells the cost model which rung applies:",
+    "  requested-resources - vendor charges for what you asked for (Modal)",
+    "  template-tier       - size comes from the template/image you launched (E2B)",
+    "",
+    "verified_on is the date a human last checked the rate against the vendor's",
+    "price page. Anything older than ~90 days is flagged in the report."
   ],
   "providers": {
     "e2b": {
@@ -14,21 +25,27 @@
       "usd_per_gib_hour": 0,
       "default_vcpus": 2,
       "default_mem_gib": 4,
-      "source": "project default supplied in spec (2026-08-28)"
+      "billed_on": "template-tier",
+      "source": "project default supplied in spec - NOT checked against e2b.dev/pricing; memory is billed separately in reality, so this row understates cost",
+      "verified_on": "2026-08-28"
     },
     "daytona": {
       "usd_per_vcpu_hour": 0.0504,
       "usd_per_gib_hour": 0,
       "default_vcpus": 2,
       "default_mem_gib": 4,
-      "source": "project default supplied in spec (2026-08-28)"
+      "billed_on": "requested-resources",
+      "source": "project default supplied in spec - NOT checked against daytona.io/pricing; Daytona meters CPU, memory and disk separately, so this row understates cost",
+      "verified_on": "2026-08-28"
     },
     "modal": {
       "usd_per_vcpu_hour": 0.070956,
       "usd_per_gib_hour": 0.024012,
       "default_vcpus": 2,
       "default_mem_gib": 2,
-      "source": "modal.com/pricing Sandboxes tier, checked 2026-08-28: $0.00003942/core/sec (1 core = 2 vCPU) => $0.070956/vCPU-hr; memory $0.00000667/GiB/sec => $0.024012/GiB-hr. Adapter pins the request to cpu=1.0 core / 2048 MiB, so these defaults match what Modal bills."
+      "billed_on": "requested-resources",
+      "source": "modal.com/pricing Sandboxes tier: $0.00003942/core/sec (1 core = 2 vCPU) => $0.070956/vCPU-hr; memory $0.00000667/GiB/sec => $0.024012/GiB-hr",
+      "verified_on": "2026-08-28"
     }
   }
 }

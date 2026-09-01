@@ -16,7 +16,7 @@ interface Hover { x: number; y: number; label: string; sub: string; color: strin
 export function ColdStartChart({ providers }: { providers: ProviderRollup[] }) {
   const [hover, setHover] = useState<Hover | null>(null);
 
-  const runners = providers.filter((p) => p.coldSamples.length > 0);
+  const runners = providers.filter((p) => p.coldSamples.length > 0 && p.cold);
   if (runners.length === 0) {
     return <p className="blurb">No cold-start samples recorded yet.</p>;
   }
@@ -53,6 +53,10 @@ export function ColdStartChart({ providers }: { providers: ProviderRollup[] }) {
             style={{ background: 'transparent', borderLeft: '2px solid var(--ink)', width: 2, borderRadius: 0 }}
           />
           median (p50)
+        </span>
+        <span className="legend-item" style={{ color: 'var(--ink-4)' }}>
+          <span className="legend-swatch" style={{ background: 'var(--ink)', opacity: 0.5, height: 5 }} />
+          95% CI on the median
         </span>
       </div>
 
@@ -93,8 +97,9 @@ export function ColdStartChart({ providers }: { providers: ProviderRollup[] }) {
         {runners.map((p, i) => {
           const c = livery(p.provider);
           const cy = PAD_T + i * ROW_H + ROW_H / 2;
-          const lo = p.coldMin ?? Math.min(...p.coldSamples);
-          const hi = p.coldP95 ?? Math.max(...p.coldSamples);
+          const d = p.cold!;
+          const lo = d.min;
+          const hi = d.max;
           return (
             <g key={p.provider}>
               <text
@@ -131,31 +136,38 @@ export function ColdStartChart({ providers }: { providers: ProviderRollup[] }) {
                 />
               ))}
 
-              {/* p50 tick — reads over the dots */}
-              {p.coldP50 !== null && (
-                <line
-                  x1={x(p.coldP50)} x2={x(p.coldP50)} y1={cy - 14} y2={cy + 14}
-                  stroke="var(--ink)" strokeWidth={2}
+              {/* Confidence interval on the median.
+                  Without it two clouds of dots look like two different
+                  answers; with it, overlapping bars say plainly that the
+                  ordering between those providers is not in the data. */}
+              {d.ci95 && (
+                <rect
+                  x={x(d.ci95[0])} y={cy - 15}
+                  width={Math.max(x(d.ci95[1]) - x(d.ci95[0]), 2)} height={5}
+                  fill="var(--ink)" opacity={0.55} rx={2}
                 />
               )}
 
+              {/* p50 tick — reads over the dots */}
+              <line
+                x1={x(d.p50)} x2={x(d.p50)} y1={cy - 14} y2={cy + 14}
+                stroke="var(--ink)" strokeWidth={2}
+              />
+
               {/* direct label in the reserved gutter: <=4 series, no legend hunting */}
-              {p.coldP50 !== null && (
-                <>
-                  <text
-                    x={PAD_L + plotW + 14} y={cy}
-                    fill="var(--ink)" fontSize={12} fontFamily="var(--font-mono)"
-                  >
-                    p50 {p.coldP50.toFixed(0)}
-                  </text>
-                  <text
-                    x={PAD_L + plotW + 14} y={cy + 13}
-                    fill="var(--ink-4)" fontSize={9.5} fontFamily="var(--font-mono)"
-                  >
-                    n={p.coldSamples.length} · max {Math.max(...p.coldSamples).toFixed(0)}
-                  </text>
-                </>
-              )}
+              <text
+                x={PAD_L + plotW + 14} y={cy}
+                fill="var(--ink)" fontSize={12} fontFamily="var(--font-mono)"
+              >
+                p50 {d.p50.toFixed(0)}
+                {d.ci95 ? ` ±${((d.ci95[1] - d.ci95[0]) / 2).toFixed(0)}` : ''}
+              </text>
+              <text
+                x={PAD_L + plotW + 14} y={cy + 13}
+                fill="var(--ink-4)" fontSize={9.5} fontFamily="var(--font-mono)"
+              >
+                n={d.n} · max {d.max.toFixed(0)}
+              </text>
             </g>
           );
         })}
@@ -174,6 +186,14 @@ export function ColdStartChart({ providers }: { providers: ProviderRollup[] }) {
         </div>
       )}
 
+      {runners.some((p) => !p.cold!.tailReliable) && (
+        <p className="footnote" style={{ color: 'var(--warn)' }}>
+          n &lt; 20 for at least one provider: the p95 in the table below is interpolated between the
+          top two samples, so read it as the maximum rather than as a tail. Medians and their
+          intervals are usable at this sample size; tails are not.
+        </p>
+      )}
+
       {/* Table view — the chart is never the only way to read the data.
           Wrapped in a div because `width:1px` is only a *minimum* for CSS
           tables, so an .sr-only <table> silently widens the page. */}
@@ -187,9 +207,9 @@ export function ColdStartChart({ providers }: { providers: ProviderRollup[] }) {
           {runners.map((p) => (
             <tr key={p.provider}>
               <th scope="row">{p.provider}</th>
-              <td>{p.coldMin?.toFixed(0)}</td>
-              <td>{p.coldP50?.toFixed(0)}</td>
-              <td>{p.coldP95?.toFixed(0)}</td>
+              <td>{p.cold!.min.toFixed(0)}</td>
+              <td>{p.cold!.p50.toFixed(0)}</td>
+              <td>{p.cold!.p95.toFixed(0)}</td>
               <td>{p.coldSamples.map((s) => s.toFixed(0)).join(', ')}</td>
             </tr>
           ))}

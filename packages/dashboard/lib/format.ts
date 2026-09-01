@@ -34,6 +34,41 @@ export function gap(value: number | null, leader: number | null): string {
   return `+${(d / 1000).toFixed(3)}`;
 }
 
+/**
+ * Half-width of the bootstrap CI on the median.
+ *
+ * Rendered next to every headline figure. A board that prints "118" invites
+ * the reader to believe the last digit; "118 ±14" tells them where the
+ * measurement stops and the noise starts.
+ */
+export function ciHalf(ci: [number, number] | null | undefined): number | null {
+  if (!ci) return null;
+  return (ci[1] - ci[0]) / 2;
+}
+
+/** Cost of 1,000 ten-minute sessions — the number people actually budget. */
+export function usdBig(v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return '—';
+  return v >= 100 ? `$${v.toFixed(0)}` : `$${v.toFixed(2)}`;
+}
+
+export function pct(v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return '—';
+  return `${Math.round(v * 100)}%`;
+}
+
+export const SEVERITY_COLOR: Record<string, string> = {
+  warning: 'var(--serious)',
+  caution: 'var(--warn)',
+  info: 'var(--ink-3)',
+};
+
+export const SEVERITY_GLYPH: Record<string, string> = {
+  warning: '▲',
+  caution: '▲',
+  info: '•',
+};
+
 export function humanize(key: string): string {
   return key
     .replace(/^_/, '')
@@ -47,7 +82,7 @@ export function fmtSummaryValue(v: unknown, key = ''): string {
   if (typeof v === 'boolean') return v ? 'YES' : 'NO';
   if (typeof v === 'number') {
     // A "rate" of 1 reads as the number one; as a percentage it reads as 100%.
-    if (/rate$/i.test(key) && v >= 0 && v <= 1) return `${(v * 100).toFixed(0)}%`;
+    if (/(rate|completion)$/i.test(key) && v >= 0 && v <= 1) return `${(v * 100).toFixed(0)}%`;
     if (/ms$/i.test(key)) return v >= 1000 ? `${(v / 1000).toFixed(2)}s` : `${v.toFixed(0)}ms`;
     if (Number.isInteger(v)) return v.toLocaleString('en-US');
     return v.toFixed(v < 1 ? 3 : 1);

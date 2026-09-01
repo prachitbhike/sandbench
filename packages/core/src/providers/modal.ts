@@ -2,7 +2,14 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { repoRoot } from '../paths.js';
-import type { ExecOpts, ExecResult, SandboxHandle, SandboxProvider } from '../types.js';
+import type {
+  CreateOptions,
+  ExecOpts,
+  ExecResult,
+  ProviderCapabilities,
+  SandboxHandle,
+  SandboxProvider,
+} from '../types.js';
 import { StdioSidecar } from './sidecar.js';
 
 interface ModalNative {
@@ -19,6 +26,30 @@ interface ModalNative {
 export class ModalProvider implements SandboxProvider {
   readonly name = 'modal';
   readonly supportsPersistence = true;
+
+  /**
+   * `nativeTsSdk: false` describes THIS ADAPTER, not Modal.
+   *
+   * Modal has published a TypeScript SDK since 2026-08. This integration
+   * predates that and still goes through a Python sidecar, which is why its
+   * line count is an outlier. The distinction matters enough to encode: a
+   * reader comparing adapters should see "our integration path", not "the
+   * vendor made this hard".
+   */
+  readonly capabilities: ProviderCapabilities = {
+    nativeTsSdk: false,
+    externalRuntime: 'python3 + modal (sidecar)',
+    resourceControl: 'per-sandbox',
+    registryImages: true,
+    separateStderr: true,
+    nonZeroExitThrows: false,
+    defaultTemplate: 'python:3.12-slim',
+    notes: [
+      'a first-party TypeScript SDK exists (npm `modal`); this adapter predates it and is due a rewrite',
+      'Sandbox.create takes cpu (physical cores) and memory (MiB) — billed on the request, not on usage',
+      'egress is on by default; block_network turns it off',
+    ],
+  };
 
   private readonly sidecar: StdioSidecar;
 
@@ -50,17 +81,23 @@ export class ModalProvider implements SandboxProvider {
     await this.sidecar.call('warmup', {}, 120_000);
   }
 
-  async createSandbox(template?: string): Promise<SandboxHandle> {
+  async createSandbox(opts?: CreateOptions): Promise<SandboxHandle> {
+    // Modal's `cpu` is physical cores and 1 core == 2 vCPU in its pricing, so
+    // the shared vCPU request is halved to ask for the same machine as the
+    // others rather than twice as much.
+    const cpu = opts?.resources ? opts.resources.vcpus / 2 : this.cpuCores;
+    const memory = opts?.resources ? opts.resources.memMib : this.memoryMib;
     const r = await this.sidecar.call<{ sandbox_id: string }>('create', {
-      ...(template ? { template } : {}),
+      ...(opts?.template ? { template: opts.template } : {}),
       timeout: this.timeoutSeconds,
-      cpu: this.cpuCores,
-      memory: this.memoryMib,
+      cpu,
+      memory,
     });
     return {
       id: r.sandbox_id,
       provider: this.name,
       createdAt: Date.now(),
+      resourcesApplied: true,
       native: { sandboxId: r.sandbox_id } satisfies ModalNative,
     };
   }

@@ -1,5 +1,12 @@
 import { CommandExitError, Sandbox } from '@e2b/code-interpreter';
-import type { ExecOpts, ExecResult, SandboxHandle, SandboxProvider } from '../types.js';
+import type {
+  CreateOptions,
+  ExecOpts,
+  ExecResult,
+  ProviderCapabilities,
+  SandboxHandle,
+  SandboxProvider,
+} from '../types.js';
 
 /**
  * E2B adapter — @e2b/code-interpreter v2.x.
@@ -16,6 +23,26 @@ export class E2BProvider implements SandboxProvider {
   readonly supportsPersistence = true;
 
   /**
+   * SandboxOpts carries no cpu/memory: E2B sizes come from the template, which
+   * has to be built ahead of time with the E2B CLI. So this adapter cannot be
+   * handed the same machine size as the others at create time, and the race
+   * records that rather than pretending the comparison is size-matched.
+   */
+  readonly capabilities: ProviderCapabilities = {
+    nativeTsSdk: true,
+    externalRuntime: null,
+    resourceControl: 'template-only',
+    registryImages: false,
+    separateStderr: true,
+    nonZeroExitThrows: true,
+    defaultTemplate: 'base',
+    notes: [
+      'commands.run throws CommandExitError on a non-zero exit; the adapter unwraps it',
+      'allowInternetAccess defaults to true — egress is on unless you turn it off',
+    ],
+  };
+
+  /**
    * Sandbox lifetime ceiling. Generous on purpose: ESCAPE ROOM's probe budget
    * alone exceeds 5 min, and we always kill explicitly in a finally, so a high
    * ceiling never costs alive-seconds.
@@ -26,11 +53,19 @@ export class E2BProvider implements SandboxProvider {
     return process.env['E2B_API_KEY'] ? [] : ['E2B_API_KEY'];
   }
 
-  async createSandbox(template?: string): Promise<SandboxHandle> {
+  /** `opts.resources` is deliberately ignored — see `capabilities` above. */
+  async createSandbox(opts?: CreateOptions): Promise<SandboxHandle> {
+    const template = opts?.template;
     const sbx = template
       ? await Sandbox.create(template, { timeoutMs: this.timeoutMs })
       : await Sandbox.create({ timeoutMs: this.timeoutMs });
-    return { id: sbx.sandboxId, provider: this.name, createdAt: Date.now(), native: sbx };
+    return {
+      id: sbx.sandboxId,
+      provider: this.name,
+      createdAt: Date.now(),
+      resourcesApplied: false,
+      native: sbx,
+    };
   }
 
   async exec(handle: SandboxHandle, cmd: string, opts?: ExecOpts): Promise<ExecResult> {

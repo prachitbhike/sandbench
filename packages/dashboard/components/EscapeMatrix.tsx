@@ -1,6 +1,6 @@
 'use client';
 
-import type { EscapeCell, MachineRow } from '@/lib/telemetry';
+import type { EscapeCell } from '@/lib/telemetry';
 import { OUTCOME_GLYPH, livery } from '@/lib/format';
 
 const PROBE_DESC: Record<string, string> = {
@@ -19,15 +19,7 @@ const PROBE_DESC: Record<string, string> = {
  * observation about a default. Every cell carries a glyph and a word alongside
  * its colour, so nothing depends on hue.
  */
-export function EscapeMatrix({
-  probes,
-  cells,
-  machines,
-}: {
-  probes: string[];
-  cells: EscapeCell[];
-  machines: MachineRow[];
-}) {
+export function EscapeMatrix({ probes, cells }: { probes: string[]; cells: EscapeCell[] }) {
   const providers = [...new Set(cells.map((c) => c.provider))];
   if (providers.length === 0) {
     return (
@@ -38,6 +30,15 @@ export function EscapeMatrix({
   }
   const at = (probe: string, provider: string): EscapeCell | undefined =>
     cells.find((c) => c.probe === probe && c.provider === provider);
+
+  // One control note per probe: the knob is a property of the probe, not of
+  // whichever provider happened to be listed first.
+  const controls = probes
+    .map((probe) => {
+      const control = cells.find((c) => c.probe === probe && c.control)?.control;
+      return control ? { probe, control } : null;
+    })
+    .filter((c): c is { probe: string; control: string } => c !== null);
 
   return (
     <>
@@ -94,34 +95,23 @@ export function EscapeMatrix({
       </table>
       </div>
 
-      {machines.length > 0 && (
-        <div className="machines">
-          {machines.map((m) => (
-            <div className="machine" key={m.provider}>
-              <div className="machine-name display" style={{ color: livery(m.provider).lit }}>
-                <span className="livery" style={{ background: livery(m.provider).base, height: 14 }} />
-                {m.provider}
-              </div>
-              <dl>
-                <dt>CPU</dt><dd>{m.cpu}</dd>
-                <dt>MEM</dt><dd>{m.memory}</dd>
-                <dt>DISK</dt><dd>{m.disk}</dd>
-                <dt>KERNEL</dt><dd>{m.kernel}</dd>
-                {m.isolation && (
-                  <>
-                    <dt>ISOLATION</dt>
-                    <dd style={{ color: 'var(--e2b-lit)' }}>{m.isolation}</dd>
-                  </>
-                )}
-              </dl>
+      {controls.length > 0 && (
+        <dl className="controls">
+          {controls.map((c) => (
+            <div key={c.probe}>
+              <dt>{c.probe}</dt>
+              <dd>{c.control}</dd>
             </div>
           ))}
-        </div>
+        </dl>
       )}
 
       <p className="footnote">
         Observational, not pass/fail — <strong style={{ color: 'var(--warn)' }}>allowed</strong> means the
         sandbox permitted the action, which may be the intended default.
+        These are <strong>defaults, not capabilities</strong>: where a platform ships a switch for a
+        row, it is named above, so a difference here is a difference in what each vendor chose to
+        turn on rather than in what it can do.
         Glyphs: ● allowed · ■ blocked · ✕ killed · ◐ partial · ○ unknown.
       </p>
     </>

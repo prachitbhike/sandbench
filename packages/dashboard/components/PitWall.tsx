@@ -68,7 +68,6 @@ export function PitWall({ initial }: { initial: Telemetry | null }) {
               index={i}
               probes={data?.probes ?? []}
               escape={data?.escape ?? []}
-              machines={data?.machines ?? []}
             />
           ))
         )}
@@ -96,7 +95,8 @@ export function PitWall({ initial }: { initial: Telemetry | null }) {
               <p className="footnote">
                 Results are append-only JSON in <code>results/</code>, one file per race,
                 schema-versioned. Cost is modelled from measured sandbox-alive seconds against the
-                rates in <code>pricing.json</code> — not billed figures.
+                rates in <code>pricing.json</code> — never read from a billing API, so treat every
+                figure on this board as an estimate with its own caveats attached.
                 {data.generatedAt && <> Snapshot <TimeAgo iso={data.generatedAt} />.</>}
               </p>
             </div>

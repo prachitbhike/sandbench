@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 import { repoRoot } from './paths.js';
+import type { LocBreakdown } from './types.js';
 
 /**
  * SDK-ergonomics metric: significant lines of adapter code per provider.
@@ -40,45 +41,75 @@ function walk(dir: string, out: string[]): void {
 }
 
 /**
- * Extra files a provider needs beyond its own adapter. The stdio RPC client
- * exists only because Modal ships no TypeScript SDK, so charging it to Modal
- * is the honest read of "SDK ergonomics".
+ * Plumbing a provider needs beyond its adapter *because of the integration
+ * path we chose*, not because of the SDK itself.
+ *
+ * Modal's stdio RPC client and Python sidecar exist only because this adapter
+ * talks to a Python SDK from TypeScript. Counting them makes Modal look ~9x
+ * harder to integrate than it is — Modal ships a TypeScript SDK. So it is
+ * counted, reported, and kept in its own column rather than silently folded
+ * into a single "LOC" number that reads as a verdict on the vendor.
  */
-const EXTRA_FILES: Record<string, string[]> = {
+const SCAFFOLDING: Record<string, string[]> = {
   modal: ['packages/core/src/providers/sidecar.ts'],
 };
 
-/** Files that make up a provider's adapter (TS adapter + any sidecar). */
-export function adapterFiles(provider: string): string[] {
-  const root = repoRoot();
+const SCAFFOLDING_DIR = (provider: string): string =>
+  resolve(repoRoot(), 'providers', `${provider}_sidecar`);
+
+/** The adapter file itself — pure SDK translation. */
+export function adapterOnlyFiles(provider: string): string[] {
+  const ts = resolve(repoRoot(), 'packages/core/src/providers', `${provider}.ts`);
+  return existsSync(ts) ? [ts] : [];
+}
+
+/** Everything that exists only to make this integration path work. */
+export function scaffoldingFiles(provider: string): string[] {
   const files: string[] = [];
-  const ts = resolve(root, 'packages/core/src/providers', `${provider}.ts`);
-  if (existsSync(ts)) files.push(ts);
-  for (const rel of EXTRA_FILES[provider] ?? []) {
-    const p = resolve(root, rel);
+  for (const rel of SCAFFOLDING[provider] ?? []) {
+    const p = resolve(repoRoot(), rel);
     if (existsSync(p)) files.push(p);
   }
-  const sidecar = resolve(root, 'providers', `${provider}_sidecar`);
-  walk(sidecar, files);
+  walk(SCAFFOLDING_DIR(provider), files);
   return files;
 }
 
-export function adapterLoc(provider: string): number | null {
-  const files = adapterFiles(provider);
+/** Files that make up a provider's adapter (TS adapter + any sidecar). */
+export function adapterFiles(provider: string): string[] {
+  return [...adapterOnlyFiles(provider), ...scaffoldingFiles(provider)];
+}
+
+function countFiles(files: string[]): number | null {
   if (files.length === 0) return null;
   let total = 0;
   for (const f of files) total += countSignificantLines(readFileSync(f, 'utf8'));
   return total;
 }
 
-export function locReport(providers: string[]): Record<string, { loc: number | null; files: string[] }> {
-  const out: Record<string, { loc: number | null; files: string[] }> = {};
+export function locBreakdown(provider: string): LocBreakdown | null {
+  const adapterF = adapterOnlyFiles(provider);
+  const scaffoldF = scaffoldingFiles(provider);
+  if (adapterF.length === 0 && scaffoldF.length === 0) return null;
+  const adapter = countFiles(adapterF);
+  const scaffolding = countFiles(scaffoldF);
   const root = repoRoot();
+  return {
+    adapter,
+    scaffolding,
+    total: (adapter ?? 0) + (scaffolding ?? 0),
+    files: [...adapterF, ...scaffoldF].map((f) => f.replace(`${root}/`, '')),
+  };
+}
+
+export function adapterLoc(provider: string): number | null {
+  return locBreakdown(provider)?.total ?? null;
+}
+
+export function locReport(providers: string[]): Record<string, LocBreakdown & { loc: number | null }> {
+  const out: Record<string, LocBreakdown & { loc: number | null }> = {};
   for (const p of providers) {
-    out[p] = {
-      loc: adapterLoc(p),
-      files: adapterFiles(p).map((f) => f.replace(`${root}/`, '')),
-    };
+    const b = locBreakdown(p) ?? { adapter: null, scaffolding: null, total: null, files: [] };
+    out[p] = { ...b, loc: b.total };
   }
   return out;
 }

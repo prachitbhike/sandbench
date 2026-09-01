@@ -21,6 +21,15 @@ export function repoRoot(): string {
   return cachedRoot;
 }
 
+/**
+ * Where race files are read from and written to.
+ *
+ * `SGP_RESULTS_DIR` lets you keep result sets apart — a scratch directory
+ * while developing the dashboard, or one directory per measurement campaign,
+ * without mixing them into the repo's own history of runs.
+ */
 export function resultsDir(): string {
+  const override = process.env['SGP_RESULTS_DIR'];
+  if (override) return resolve(override);
   return resolve(repoRoot(), 'results');
 }

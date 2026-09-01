@@ -31,6 +31,17 @@ export function Masthead({ data, live, lastSync }: { data: Telemetry | null; liv
             </span>
           </div>
           <div className="readout">
+            {/* Surfaced at masthead level on purpose: an unqualified board is
+                the failure mode this project is trying to avoid. */}
+            <span className="readout-label">Open caveats</span>
+            <span
+              className="readout-value display num"
+              style={{ color: data && data.openCaveats > 0 ? 'var(--warn)' : 'var(--ink)' }}
+            >
+              {data?.openCaveats ?? '—'}
+            </span>
+          </div>
+          <div className="readout">
             <span className="readout-label">Errors captured</span>
             <span
               className="readout-value display num"

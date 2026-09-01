@@ -39,9 +39,20 @@ export interface RelayReduction {
   reduceMatchesReference: boolean;
   categories: number;
   rateLimitHits: number;
-  /** Wall clock from first create to last create — parallel provisioning window. */
+  /** Fraction of the fleet that actually came up. */
+  fleetCompletion: number;
+  /** Wall clock from fleet start to the last successful create. */
   provisioningWindowMs: number | null;
+  /**
+   * Successful creates per second across that window. Only comparable at
+   * fleetCompletion == 1: a provider throttled after two sandboxes can post a
+   * spectacular rate for the two it managed.
+   */
   createThroughputPerSec: number | null;
+  /** Whether the throughput figure above can be compared to another provider's. */
+  throughputComparable: boolean;
+  /** Sandboxes that came up before the provider started refusing. */
+  concurrencyCeiling: number | null;
 }
 
 /**
@@ -141,12 +152,20 @@ function reduce(results: IterationResult[], size: number): RelayReduction {
     0,
   );
 
-  // Provisioning window: how long until every sandbox in the fleet existed.
-  const creates = results
-    .map((r) => r.steps.find((s) => s.name === 'createSandbox'))
-    .filter((s): s is NonNullable<typeof s> => Boolean(s));
-  const slowestCreate = creates.length ? Math.max(...creates.map((s) => s.durationMs)) : null;
+  // Provisioning window.
+  //
+  // The old definition was max(individual create duration), which silently
+  // excluded creates that failed — so a provider throttled on half the fleet
+  // reported the window of the half that worked, and a flattering
+  // creates-per-second to go with it. Every shard starts together, so the
+  // honest window is the longest wall-clock wait to a live sandbox, and
+  // throughput is qualified by how much of the fleet actually came up.
   const okCreates = results.filter((r) => r.coldStartMs !== undefined).length;
+  const acquisitions = results
+    .map((r) => r.acquireMs ?? r.coldStartMs)
+    .filter((v): v is number => typeof v === 'number');
+  const windowMs = acquisitions.length ? Math.max(...acquisitions) : null;
+  const completion = size > 0 ? okCreates / size : 0;
 
   return {
     fleetSize: size,
@@ -157,9 +176,12 @@ function reduce(results: IterationResult[], size: number): RelayReduction {
     reduceMatchesReference: matches,
     categories: Object.keys(merged).length,
     rateLimitHits,
-    provisioningWindowMs: slowestCreate,
+    fleetCompletion: Number(completion.toFixed(3)),
+    provisioningWindowMs: windowMs,
     createThroughputPerSec:
-      slowestCreate && slowestCreate > 0 ? Number((okCreates / (slowestCreate / 1000)).toFixed(2)) : null,
+      windowMs && windowMs > 0 ? Number((okCreates / (windowMs / 1000)).toFixed(2)) : null,
+    throughputComparable: completion >= 1,
+    concurrencyCeiling: okCreates,
   };
 }
 

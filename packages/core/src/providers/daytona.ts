@@ -1,5 +1,12 @@
 import { Daytona, type Sandbox } from '@daytona/sdk';
-import type { ExecOpts, ExecResult, SandboxHandle, SandboxProvider } from '../types.js';
+import type {
+  CreateOptions,
+  ExecOpts,
+  ExecResult,
+  ProviderCapabilities,
+  SandboxHandle,
+  SandboxProvider,
+} from '../types.js';
 
 /**
  * Daytona adapter — @daytona/sdk v0.207.
@@ -19,6 +26,23 @@ export class DaytonaProvider implements SandboxProvider {
   readonly name = 'daytona';
   readonly supportsPersistence = true;
 
+  readonly capabilities: ProviderCapabilities = {
+    nativeTsSdk: true,
+    externalRuntime: null,
+    resourceControl: 'per-sandbox',
+    registryImages: true,
+    // executeCommand merges the two streams into `result`; there is no
+    // separate stderr channel, so failure diagnostics are thinner here.
+    separateStderr: false,
+    nonZeroExitThrows: false,
+    defaultTemplate: null,
+    notes: [
+      'create() takes resources { cpu, memory (GiB), disk (GiB) } — but only on the from-image overload',
+      'accepts a registry tag directly as `image`, so it can be image-matched with Modal',
+      'egress policy is set per sandbox via networkBlockAll / networkAllowList',
+    ],
+  };
+
   private client: Daytona | null = null;
 
   missingEnv(): string[] {
@@ -35,12 +59,26 @@ export class DaytonaProvider implements SandboxProvider {
     return this.client;
   }
 
-  async createSandbox(template?: string): Promise<SandboxHandle> {
+  /**
+   * `resources` lives on the from-image overload only — the snapshot overload
+   * has no such field. So an unpinned run gets Daytona's default machine and
+   * says so, rather than reporting a size-matched comparison it did not make.
+   */
+  async createSandbox(opts?: CreateOptions): Promise<SandboxHandle> {
+    const resources = opts?.resources
+      ? { cpu: opts.resources.vcpus, memory: Math.round(opts.resources.memMib / 1024) }
+      : undefined;
     // Branch explicitly: create() is overloaded on snapshot-vs-image params.
-    const sandbox = template
-      ? await this.daytona.create({ image: template })
+    const sandbox = opts?.template
+      ? await this.daytona.create({ image: opts.template, ...(resources ? { resources } : {}) })
       : await this.daytona.create();
-    return { id: sandbox.id, provider: this.name, createdAt: Date.now(), native: sandbox };
+    return {
+      id: sandbox.id,
+      provider: this.name,
+      createdAt: Date.now(),
+      resourcesApplied: Boolean(opts?.template && resources),
+      native: sandbox,
+    };
   }
 
   async exec(handle: SandboxHandle, cmd: string, opts?: ExecOpts): Promise<ExecResult> {

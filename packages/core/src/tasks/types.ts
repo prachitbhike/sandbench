@@ -31,6 +31,14 @@ interface TaskBase {
   defaultIterations: number;
   /** Roll iteration outputs up into report columns. */
   summarize?(iterations: IterationResult[]): Record<string, unknown>;
+  /**
+   * Phases whose errors are the finding, not a failure.
+   *
+   * ESCAPE ROOM exists to provoke the sandbox: a provider whose memory cap
+   * kills the OOM probe was doing its job. Without this, the strictest
+   * isolation would score as the most broken provider.
+   */
+  expectedErrorPhase?(phase: string): boolean;
 }
 
 /** One fresh sandbox per iteration, run sequentially. */

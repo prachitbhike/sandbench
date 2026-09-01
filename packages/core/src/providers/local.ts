@@ -2,7 +2,14 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import type { ExecOpts, ExecResult, SandboxHandle, SandboxProvider } from '../types.js';
+import type {
+  CreateOptions,
+  ExecOpts,
+  ExecResult,
+  ProviderCapabilities,
+  SandboxHandle,
+  SandboxProvider,
+} from '../types.js';
 
 interface LocalNative {
   root: string;
@@ -20,14 +27,31 @@ export class LocalProvider implements SandboxProvider {
   readonly name = 'local';
   readonly supportsPersistence = true;
 
+  readonly capabilities: ProviderCapabilities = {
+    nativeTsSdk: true,
+    externalRuntime: null,
+    resourceControl: 'none',
+    registryImages: false,
+    separateStderr: true,
+    nonZeroExitThrows: false,
+    defaultTemplate: null,
+    notes: ['harness fixture — a temp directory and a subprocess, with no isolation of any kind'],
+  };
+
   missingEnv(): string[] {
     return [];
   }
 
-  async createSandbox(_template?: string): Promise<SandboxHandle> {
+  async createSandbox(_opts?: CreateOptions): Promise<SandboxHandle> {
     const root = await mkdtemp(join(tmpdir(), 'sgp-local-'));
     await mkdir(join(root, 'tmp'), { recursive: true });
-    return { id: root, provider: this.name, createdAt: Date.now(), native: { root } satisfies LocalNative };
+    return {
+      id: root,
+      provider: this.name,
+      createdAt: Date.now(),
+      resourcesApplied: false,
+      native: { root } satisfies LocalNative,
+    };
   }
 
   /** Sandbox-absolute paths (/tmp/x) are remapped under the temp root. */

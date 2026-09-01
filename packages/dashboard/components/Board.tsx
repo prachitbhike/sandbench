@@ -1,20 +1,22 @@
 'use client';
 
-import type { TaskBoard } from '@/lib/telemetry';
+import type { EscapeCell, TaskBoard } from '@/lib/telemetry';
 import { TimingTower, order } from './TimingTower';
 import { LapTrace } from './LapTrace';
 import { ColdStartChart } from './ColdStartChart';
+import { LatencySplit } from './LatencySplit';
 import { StepBreakdown } from './StepBreakdown';
 import { EscapeMatrix } from './EscapeMatrix';
+import { PlatformPlate } from './PlatformPlate';
+import { FairnessPanel } from './FairnessPanel';
 import { fmtSummaryValue, humanize, livery } from '@/lib/format';
 import { TimeAgo } from './TimeAgo';
-import type { EscapeCell, MachineRow } from '@/lib/telemetry';
 
 const TASK_COPY: Record<string, { name: string; blurb: string }> = {
   sprint: {
     name: 'Sprint',
     blurb:
-      'Cold-start qualifying. Write a Python script into a fresh sandbox, execute it, read stdout back — the 10,000th prime. Repeated to build a cold-start distribution.',
+      'Cold-start qualifying. Write a Python script into a fresh sandbox, execute it, read stdout back — the 10,000th prime — then push 1 MiB in and pull it back out. Repeated to build a distribution.',
   },
   marathon: {
     name: 'Marathon',
@@ -24,7 +26,7 @@ const TASK_COPY: Record<string, { name: string; blurb: string }> = {
   escape: {
     name: 'Escape Room',
     blurb:
-      'Isolation scrutineering. Each probe attempts something a hostile agent might, and we record what the sandbox does about it. Observational — not a score.',
+      'Isolation scrutineering. Each probe attempts something a hostile agent might, and we record what the sandbox does about it. Observational — and what it observes is each platform’s default, not its ceiling.',
   },
   relay: {
     name: 'Relay',
@@ -38,13 +40,11 @@ export function Board({
   index,
   probes,
   escape,
-  machines,
 }: {
   board: TaskBoard;
   index: number;
   probes: string[];
   escape: EscapeCell[];
-  machines: MachineRow[];
 }) {
   const copy = TASK_COPY[board.task] ?? { name: board.task, blurb: '' };
   const ranked = order(board.providers);
@@ -55,6 +55,7 @@ export function Board({
   // A "distribution" of one sample is not a chart — show where the single long
   // run actually spent its time instead.
   const hasDistribution = board.providers.some((p) => p.coldSamples.length > 1);
+  const hasSplit = board.providers.some((p) => p.ready && p.cold);
 
   return (
     <section className="panel">
@@ -64,12 +65,25 @@ export function Board({
           {copy.name}
         </h2>
         <span className="panel-meta">
-          {board.iterations} {board.task === 'relay' ? 'sandboxes' : 'iterations'} ·{' '}
+          {board.iterations} {board.task === 'relay' ? 'sandboxes' : 'laps'} ·{' '}
           <TimeAgo iso={board.startedAt} /> · {board.raceId}
         </span>
       </div>
       <div className="panel-body">
         {copy.blurb && <p className="blurb">{copy.blurb}</p>}
+
+        {/* The conditions the run was held under, stated before the results —
+            an ordering claim means nothing without them. */}
+        <div className="protocol">
+          <span><b>{board.config.order}</b> provider order</span>
+          <span>{board.config.formationLap ? 'formation lap' : 'no formation lap'}</span>
+          <span>
+            {board.config.resources
+              ? `asked for ${board.config.resources.vcpus} vCPU / ${(board.config.resources.memMib / 1024).toFixed(0)} GiB`
+              : 'default machine size'}
+          </span>
+          <span>{board.config.probes ? 'readiness + RTT probed' : 'no micro-probes'}</span>
+        </div>
 
         <div className="scroll-x">
           <TimingTower board={board} />
@@ -77,7 +91,7 @@ export function Board({
 
         {isEscape ? (
           <div style={{ marginTop: 26 }}>
-            <EscapeMatrix probes={probes} cells={escape} machines={machines} />
+            <EscapeMatrix probes={probes} cells={escape} />
           </div>
         ) : (
           <>
@@ -109,7 +123,15 @@ export function Board({
                               v === false ||
                               (k.toLowerCase().includes('failed') && typeof v === 'number' && v > 0) ||
                               (k.toLowerCase().includes('throttl') && typeof v === 'number' && v > 0) ||
-                              (k.toLowerCase().includes('ratelimit') && typeof v === 'number' && v > 0);
+                              (k.toLowerCase().includes('ratelimit') && typeof v === 'number' && v > 0) ||
+                              // A fleet that only half came up cannot be compared
+                              // on throughput, so flag it where it is read.
+                              (k === 'fleetCompletion' && typeof v === 'number' && v < 1) ||
+                              // Creates-per-second counts only successful
+                              // creates, so a throttled fleet can post a
+                              // flattering rate for the few it managed.
+                              (k === 'createThroughputPerSec' &&
+                                p.summary?.['throughputComparable'] === false);
                             return (
                               <td key={p.provider}>
                                 <span
@@ -125,6 +147,13 @@ export function Board({
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+
+            {hasSplit && (
+              <div style={{ marginTop: 26 }}>
+                <h3 className="subhead display">Where the wait comes from</h3>
+                <LatencySplit providers={board.providers} />
               </div>
             )}
 
@@ -149,6 +178,13 @@ export function Board({
             )}
           </>
         )}
+
+        <div style={{ marginTop: 26 }}>
+          <h3 className="subhead display">What was under test</h3>
+          <PlatformPlate providers={board.providers} />
+        </div>
+
+        <FairnessPanel notes={board.fairness} />
       </div>
     </section>
   );

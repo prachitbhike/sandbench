@@ -1,4 +1,11 @@
-import type { IterationResult } from '../types.js';
+import {
+  ENVIRONMENT_CMD,
+  PROBE_MARK,
+  marker,
+  parseEnvironment,
+  parseKv,
+} from '../environment.js';
+import type { Environment, IterationResult } from '../types.js';
 import type { Task, TaskContext } from './types.js';
 
 export type ProbeOutcome = 'allowed' | 'blocked' | 'killed' | 'partial' | 'unknown';
@@ -13,6 +20,8 @@ export interface ProbeResult {
   evidence: string;
   /** Extra structured detail, e.g. bytes actually written. */
   detail?: Record<string, unknown>;
+  /** The knob that changes this behaviour, so a default is not read as a limit. */
+  control?: string;
 }
 
 interface Probe {
@@ -20,11 +29,17 @@ interface Probe {
   description: string;
   cmd: string;
   timeoutMs: number;
+  /**
+   * How you would change this outcome on each platform. Without it, a reader
+   * sees "Daytona blocks egress, the others don't" and concludes one is safer,
+   * when all three ship a switch and merely default differently.
+   */
+  control?: string;
   /** Interpret the raw result. This is observational: nothing is pass/fail. */
   classify(stdout: string, stderr: string, exitCode: number): { outcome: ProbeOutcome; evidence: string; detail?: Record<string, unknown> };
 }
 
-const MARK = '__SGP__';
+const MARK = PROBE_MARK;
 
 /**
  * Probes are written so the interesting signal is printed on stdout with a
@@ -36,6 +51,7 @@ const PROBES: Probe[] = [
     name: 'outbound_http',
     description: 'HTTP GET http://example.com',
     timeoutMs: 45_000,
+    control: 'default egress policy — E2B allowInternetAccess, Daytona networkBlockAll/networkAllowList, Modal block_network',
     cmd: `python3 - <<'PY'
 import urllib.request, traceback
 try:
@@ -179,6 +195,7 @@ PY`,
     name: 'memory_oom',
     description: 'Allocate memory until OOM',
     timeoutMs: 180_000,
+    control: 'memory ceiling follows the requested/template size, not a platform limit',
     cmd: `python3 - <<'PY'
 import sys
 blocks, err = [], ""
@@ -235,24 +252,9 @@ PY`,
 
 export const PROBE_NAMES = PROBES.map((p) => p.name);
 
-/** What the sandbox actually gives you — grounds the cost model in reality. */
-export interface MachineSpecs {
-  /** Host CPUs as the guest sees them — inflated under gVisor. */
-  cpuCount: number | null;
-  /** Schedulable CPUs (affinity mask) — the honest core count. */
-  affinity: number | null;
-  /** cgroup CPU quota in cores, when one is set. */
-  cpuQuota: number | null;
-  memLimitGib: number | null;
-  diskFreeGib: number | null;
-  kernel: string | null;
-  /** Isolation technology inferred from the kernel string. */
-  isolation: string | null;
-  raw: string;
-}
-
 export interface EscapeOutput {
-  specs: MachineSpecs | null;
+  /** The machine as delivered — shared with the runner's cost calibration. */
+  specs: Environment | null;
   probes: ProbeResult[];
 }
 
@@ -273,8 +275,8 @@ export const escapeTask: Task = {
 
     // Capture real CPU/memory before probing: pricing.json's vCPU assumption
     // is only as good as the machine the provider actually hands out.
-    const specsRes = await provider.exec(handle, SPECS_CMD, { timeoutMs: 60_000 }, 'probe:specs');
-    const specs = parseSpecs(specsRes.stdout);
+    const specsRes = await provider.exec(handle, ENVIRONMENT_CMD, { timeoutMs: 60_000 }, 'probe:specs');
+    const specs = parseEnvironment(specsRes.stdout, null);
 
     for (const probe of PROBES) {
       const res = await provider.exec(handle, probe.cmd, { timeoutMs: probe.timeoutMs }, `probe:${probe.name}`);
@@ -293,6 +295,7 @@ export const escapeTask: Task = {
         durationMs: res.durationMs,
         evidence: classified.evidence,
         ...(classified.detail ? { detail: classified.detail } : {}),
+        ...(probe.control ? { control: probe.control } : {}),
       });
     }
     return { specs, probes: results };
@@ -306,9 +309,9 @@ export const escapeTask: Task = {
     const byProbe: Record<string, ProbeOutcome | string> = {};
     if (specs) {
       byProbe['_machine'] =
-        `${specs.affinity ?? specs.cpuCount ?? '?'} cpu` +
+        `${specs.vcpus ?? '?'} cpu` +
         `${specs.cpuQuota ? ` (quota ${specs.cpuQuota})` : ''}` +
-        ` / ${specs.memLimitGib ?? '?'} GiB mem` +
+        ` / ${specs.memGib ?? '?'} GiB mem` +
         `${specs.isolation ? ` / ${specs.isolation}` : ''}`;
     }
     for (const name of PROBE_NAMES) {
@@ -317,108 +320,15 @@ export const escapeTask: Task = {
     }
     return byProbe;
   },
+
+  // A sandbox that dies under the OOM probe made this task work, not fail.
+  expectedErrorPhase: (phase) => phase.startsWith('probe:'),
 };
-
-/** Last marker line, optionally requiring a key — probes may stream progress. */
-const SPECS_CMD = `python3 - <<'PY'
-import os, platform
-def read(p):
-    try:
-        return open(p).read().strip()
-    except Exception:
-        return ""
-
-# os.cpu_count() reports HOST cpus under gVisor/Firecracker; the schedulable
-# affinity mask and the cgroup quota are what the workload actually gets.
-try:
-    affinity = len(os.sched_getaffinity(0))
-except Exception:
-    affinity = 0
-
-quota = ""
-cpu_max = read("/sys/fs/cgroup/cpu.max")            # cgroup v2: "<quota> <period>"
-if cpu_max:
-    parts = cpu_max.split()
-    if len(parts) == 2 and parts[0] != "max":
-        try:
-            quota = "%.3f" % (int(parts[0]) / int(parts[1]))
-        except Exception:
-            quota = ""
-
-mem = read("/sys/fs/cgroup/memory.max") or read("/sys/fs/cgroup/memory/memory.limit_in_bytes")
-try:
-    st = os.statvfs("/tmp")
-    disk = st.f_bavail * st.f_frsize
-except Exception:
-    disk = 0
-
-print("${MARK}cpu_count=%s affinity=%s cpu_quota=%s mem_bytes=%s disk_bytes=%s kernel=%s" % (
-    os.cpu_count() or 0, affinity, quota or "none", mem or "unknown", disk, platform.release()))
-PY`;
-
-function parseSpecs(stdout: string): MachineSpecs | null {
-  const line = marker(stdout, 'cpu_count');
-  if (!line) return null;
-  const d = parseKv(line);
-  const memRaw = d['mem_bytes'] ?? '';
-  const memBytes = /^\d+$/.test(memRaw) ? Number(memRaw) : null;
-  const diskBytes = Number(d['disk_bytes'] ?? 0);
-  // Sandboxes on virtualised filesystems report absurd free space; anything
-  // past a petabyte is a synthetic number, not a real quota.
-  const PLAUSIBLE_MAX = 1024 ** 5;
-  const gib = (b: number | null): number | null =>
-    b === null || !Number.isFinite(b) || b <= 0 || b > PLAUSIBLE_MAX
-      ? null
-      : Number((b / 1024 ** 3).toFixed(2));
-  const kernel = d['kernel'] ?? null;
-  const quotaRaw = d['cpu_quota'] ?? 'none';
-  return {
-    cpuCount: numOrNull(d['cpu_count']),
-    affinity: numOrNull(d['affinity']),
-    cpuQuota: quotaRaw === 'none' ? null : numOrNull(quotaRaw),
-    memLimitGib: gib(memBytes),
-    diskFreeGib: gib(diskBytes),
-    kernel,
-    isolation: inferIsolation(kernel),
-    raw: line,
-  };
-}
-
-function numOrNull(v: string | undefined): number | null {
-  if (v === undefined) return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
-/** Kernel strings leak the sandboxing technology. */
-function inferIsolation(kernel: string | null): string | null {
-  if (!kernel) return null;
-  const k = kernel.toLowerCase();
-  if (k.includes('gvisor')) return 'gVisor';
-  if (k.includes('microvm') || k.includes('amazon') || k.includes('fc')) return 'microVM (likely Firecracker)';
-  if (k.includes('wsl')) return 'WSL';
-  return null;
-}
-
-function marker(stdout: string, requireKey?: string): string {
-  const lines = stdout.split('\n').filter((l) => l.includes(MARK));
-  const wanted = requireKey ? lines.filter((l) => l.includes(`${requireKey}=`)) : lines;
-  const line = wanted[wanted.length - 1];
-  return line ? line.slice(line.indexOf(MARK) + MARK.length).trim() : '';
-}
 
 /** Highest progress checkpoint a streaming probe reported before it died. */
 function lastProgressMb(stdout: string): number | null {
   const hits = [...stdout.matchAll(/progress_mb=(\d+)/g)].map((m) => Number(m[1]));
   return hits.length ? Math.max(...hits) : null;
-}
-
-/** Parse `k=v k=v` where the final value may contain spaces. */
-function parseKv(line: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  const re = /(\w+)=([^\s]*(?:\s(?![\w]+=)[^\s]*)*)/g;
-  for (const m of line.matchAll(re)) out[m[1]!] = m[2]!.trim();
-  return out;
 }
 
 function unknown(stdout: string, stderr: string, exitCode: number): { outcome: ProbeOutcome; evidence: string } {
