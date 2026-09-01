@@ -271,7 +271,13 @@ async function runLap(
       if (!lane.environmentCaptured) {
         lane.environmentCaptured = true;
         const res = await inst.exec(handle, ENVIRONMENT_CMD, { timeoutMs: 60_000 }, 'probe:environment');
-        lane.environment = parseEnvironment(res.stdout, lane.template);
+        // The *effective* image, not just a pinned one: an unpinned run still
+        // has a known default, and recording it as "provider default" made the
+        // parity check disagree with the platform table beside it.
+        lane.environment = parseEnvironment(
+          res.stdout,
+          lane.template ?? lane.base.capabilities.defaultTemplate,
+        );
       }
       if (task.mode === 'perSandbox') {
         execRtt = await measureExecRoundTrips(inst, handle, EXEC_RTT_SAMPLES);

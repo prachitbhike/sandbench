@@ -19,9 +19,11 @@ inside the sandboxes.
 > report the harness generates against its own output. See
 > [What this benchmark controls, and what it doesn't](#what-this-benchmark-controls-and-what-it-doesnt).
 >
-> The numbers under [Measured results](#measured-results) predate that work and
-> are labelled accordingly — they are kept as a record of the v1 harness, not as
-> current findings.
+> [Measured results](#measured-results) are from a full v2 run against real
+> infrastructure on all three providers, 2026-09-01. The headline: on
+> `createSandbox()` latency the three are within 100 ms of each other, and on
+> time-to-a-usable-sandbox they are **5.6× apart**. The v1 harness ranked on the
+> former.
 
 ---
 
@@ -461,28 +463,45 @@ fixing them is the highest-value edit anyone can make to this repo.
 
 ## Measured results
 
-> ⚠️ **These are v1-harness numbers, kept as a record.** They were produced on
-> 2026-08-28 by the previous methodology: providers measured one after another
-> rather than interleaved, ranked on `createSandbox()` latency rather than time
-> to ready, no confidence intervals, no per-command round trip, and costed on
-> assumed machine sizes. Several conclusions below do not survive the current
-> harness — in particular the ~5 ms SPRINT gap between E2B and Daytona is
-> inside the noise a bootstrap CI would show, and Daytona's RELAY
-> creates-per-second is computed over a fleet that only half came up. Re-run
-> `sgp race --all` to replace this section.
+Full three-way grand prix, **2026-09-01**, schema v2, from a single client in
+one location. Every number came out of `sgp race`; nothing is hand-written.
+Providers were interleaved lap by lap, each asked for 2 vCPU / 2 GiB, on their
+**default images** — so read the caveats, which the harness prints under every
+table.
 
-Full three-way grand prix, 2026-08-28, all providers on their default images.
+Zero orphaned sandboxes: 116 destroys across the four races, none failed.
 
-### SPRINT — cold start (10 laps each)
+### SPRINT — 20 laps each
 
-| Provider | p50 | p95 | min | Correct | Cost |
-| --- | --- | --- | --- | --- | --- |
-| **e2b** | **118 ms** | 513 ms | 109 ms | 10/10 | $0.00011 |
-| daytona | 123 ms | **147 ms** | 119 ms | 10/10 | $0.00018 |
-| modal | 158 ms | 280 ms | 151 ms | 10/10 | $0.00103 |
+| Provider | Ready p50 | Create p50 | Exec RTT p50 | Upload | Download | Laps ok | $/1k sessions |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **e2b** | **276 ms** ±22 | 162 ms | **56 ms** | **6.4 MB/s** | **18.0 MB/s** | 20/20 | $16.80 |
+| daytona | 545 ms ±71 | 261 ms | 116 ms | 2.1 MB/s | 1.8 MB/s | 20/20 | **$8.40** |
+| modal | 1.54 s ±167 | **175 ms** | 306 ms | 1.4 MB/s | 1.8 MB/s | 20/20 | $31.66 |
 
-E2B has the fastest median but the longest tail; Daytona is the most
-consistent (p95 only 24 ms above p50).
+**This is the finding the v1 harness could not see.** On `createSandbox()`
+latency the three are nearly tied — 162 / 261 / 175 ms — and Modal is second
+fastest. On *time to a sandbox that will actually run a command* they are 5.6×
+apart, and Modal is last by more than a second. Modal's `create` returns in
+175 ms and the first command then takes ~1.36 s: the wait moved, it did not
+disappear. Ranking on create latency rewards exactly that.
+
+The per-command round trip compounds it. An agent session issuing 50 commands
+pays 2.8 s on E2B, 5.8 s on Daytona and 15.3 s on Modal — before any of them
+does a single second of useful work, and dwarfing the cold-start gap the old
+table led with.
+
+Cold-start spread (create only):
+
+| Provider | n | min | p50 | p90 | p95 | max | CV | Lap 1 | Steady p50 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| e2b | 20 | 106 ms | 162 ms | 205 ms | 207 ms | 233 ms | 0.22 | 206 ms | 160 ms |
+| daytona | 20 | 128 ms | 261 ms | 299 ms | 306 ms | 315 ms | 0.31 | 270 ms | 260 ms |
+| modal | 20 | 162 ms | 175 ms | 195 ms | 212 ms | 376 ms | **0.24** | 376 ms | 174 ms |
+
+At n=20 the p95 is finally worth printing. Modal has the tightest body and the
+worst single outlier — its max is its first lap, which is connection warm-up
+rather than the platform.
 
 ### MARATHON — stateful session
 
@@ -490,13 +509,17 @@ All three completed the full cycle: deps and files persisted across separate
 `exec` calls, the deliberately-broken test failed, and the suite went green
 after the fix.
 
-| Provider | Cold start | pip install | Cost |
+| Provider | Ready | pip install | Cost |
 | --- | --- | --- | --- |
-| e2b | 200 ms | 1560 ms | $0.00012 |
-| daytona | 299 ms | **1036 ms** | $0.00021 |
-| modal | 362 ms | 2233 ms | $0.00039 |
+| e2b | **322 ms** | 1.56 s | $0.00013 |
+| daytona | 630 ms | **1.06 s** | $0.00012 |
+| modal | 1.60 s | 3.31 s | $0.00064 |
 
-### ESCAPE ROOM — isolation (observational)
+The `pip install` column is **not** a clean comparison: all three ran different
+default images with different Python versions (3.13.14 / 3.14.4 / 3.12.14) and
+different preinstalled packages. That is image choice as much as platform.
+
+### ESCAPE ROOM — isolation (observational, not ranked)
 
 | Probe | e2b | modal | daytona |
 | --- | --- | --- | --- |
@@ -509,49 +532,51 @@ after the fix.
 
 Machine as delivered:
 
-| Provider | CPU | Memory | Disk | Kernel |
-| --- | --- | --- | --- | --- |
-| e2b | 2 schedulable | no cap reported | 0.97 GiB free | 6.1.158+ |
-| modal | 17 schedulable | 376 GiB cap | unreported | `4.19.0-gvisor` → **gVisor** |
-| daytona | 64 schedulable, **cgroup quota 1 core** | 1 GiB cap | 3 GiB free | 6.8.0-138-generic |
+| Provider | Image | CPU | Memory | Disk | Kernel |
+| --- | --- | --- | --- | --- | --- |
+| e2b | `base` | 2 vCPU | no cap reported | 0.97 GiB free | 6.1.158+ |
+| modal | `python:3.12-slim` | 17 schedulable | 448 GiB | unreported | `4.19.0-gvisor` → **gVisor** |
+| daytona | provider default | **1 vCPU (cgroup quota)** | 1 GiB | 3 GiB free | 6.8.0-generic |
 
-Read as observation, not scoring. The real spread: Daytona is the only one that
-blocks egress by default; E2B exposes a much wider PID namespace and has a
-~1 GiB disk; Modal enforces no memory ceiling on this configuration, so nothing
-OOM-killed. E2B and Daytona both OOM-killed as their caps imply. The OOM probe
-touches one byte per 4 KiB page precisely so lazily-mapped zero pages cannot
-fake an "allowed" result.
+Read as observation of **defaults**, not capabilities. All three ship an egress
+switch (E2B `allowInternetAccess`, Daytona `networkBlockAll` /
+`networkAllowList`, Modal `block_network`), and the memory ceiling follows the
+size you asked for — Modal did not OOM because it was handed 448 GiB, not
+because it has no limits. The real spread: Daytona is the only one blocking
+egress by default, E2B exposes a much wider PID namespace and a ~1 GiB disk.
+The OOM probe touches one byte per 4 KiB page precisely so lazily-mapped zero
+pages cannot fake an "allowed".
 
 ### RELAY — 20 parallel sandboxes over 100k rows
 
-| Provider | Shards | Rows | Reduce matches | Throttled | Provisioning window | Creates/sec |
-| --- | --- | --- | --- | --- | --- | --- |
-| modal | **20/20** | 100,000 | ✅ | 0 | 2366 ms | 8.5 |
-| e2b | **20/20** | 100,000 | ✅ | 1 (retried, recovered) | **251 ms** | **79.7** |
-| daytona | 10/20 | 50,000 | ❌ | 10 | 372 ms | 26.9 |
+| Provider | Shards | Rows | Reduce matches | Throttled | Window | Creates/sec | Comparable |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| e2b | **20/20** | 100,000 | ✅ | 0 | 457 ms | 43.8 | yes |
+| modal | **20/20** | 100,000 | ✅ | 0 | 490 ms | 40.8 | yes |
+| daytona | 10/20 | 50,000 | ❌ | 20 | 349 ms | 28.7 | **no** |
 
-This is where the providers actually separate, and it is entirely account-tier
-capacity rather than raw speed:
+Daytona hit `Total CPU limit exceeded. Maximum allowed: 10` on half the fleet.
+Only 50,000 of 100,000 rows were processed, and the reduce-vs-local reference
+check correctly flagged the result as not matching — a benchmark without that
+check would have reported a plausible-looking half-answer as a success.
 
-- **E2B** hit `maximum number of concurrent E2B sandboxes (20)` once. The single
-  permitted create retry absorbed it and all 20 shards completed.
-- **Daytona** hit `Total CPU limit exceeded. Maximum allowed: 10` on half the
-  fleet. Only 50,000 of 100,000 rows were processed — and the reduce-vs-local
-  reference check correctly flagged the result as **not matching**. A benchmark
-  without that check would have reported a plausible-looking half-answer as a
-  success.
-- **Modal** provisioned all 20 cleanly but with the widest create window on this
-  run (2366 ms; an earlier run managed 471 ms, so treat Modal's parallel
-  provisioning as high-variance).
+Its 349 ms window and 28.7 creates/sec are **the fastest-looking window in the
+table and the least meaningful number in it**: both count only the ten
+sandboxes that came up. The harness marks the row not-comparable rather than
+letting it sit next to the two complete fleets as if it were a peer. This is an
+account-tier ceiling, not a capability limit.
 
-Both failure modes are quota, not capability — raising either account's tier
-would likely change this table.
+Modal is also worth noting here: 441 ms create p50 in parallel against 175 ms
+sequentially, and a 2.2 s time-to-ready. Its provisioning degrades under
+fan-out in a way the sequential races do not show.
 
 ### Cost
 
-The entire four-race grand prix across all three providers cost well under
-**$0.01** in total — which is the other reason to distrust the cost column as a
-decision input at this scale, and to read `$/1k sessions` instead.
+The whole four-race grand prix cost **$0.0126** across all three providers,
+which is the other reason not to read the `Cost` column as a decision input at
+this scale — read `$/1k sessions` instead. And note that two of the three rate
+cards in `pricing.json` are unverified placeholders that omit memory (and, for
+Daytona, disk) billing, so the E2B and Daytona figures understate real cost.
 
 ---
 
