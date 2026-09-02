@@ -3,11 +3,14 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "sgp": "pnpm --filter @sgp/cli exec sgp"
+    "sgp": "pnpm --filter @sgp/cli exec sgp",
+    "dashboard": "pnpm --filter @sgp/dashboard dev"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

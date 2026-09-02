@@ -1,0 +1,456 @@
+/* ==========================================================================
+   SANDBOX GRAND PRIX — pit wall telemetry
+   Reference: trackside timing boards. Dense, hairline-ruled, monospace
+   numerics, livery-coded competitors. No soft cards, no friendly radii.
+   ========================================================================== */
+
+:root {
+  /* --- surfaces: near-black with a cold cast, like a CRT timing screen --- */
+  --void:        #05070a;
+  --surface:     #0a0d12;
+  --surface-2:   #0e1219;
+  --surface-3:   #141a23;
+  --rule:        rgba(150, 180, 210, 0.13);
+  --rule-strong: rgba(150, 180, 210, 0.26);
+
+  /* --- ink --- */
+  --ink:         #e8eef5;
+  --ink-2:       #97a6b8;
+  --ink-3:       #5d6b7d;
+  --ink-4:       #3a4552;
+
+  /* --- livery: validated categorical palette (dataviz six checks, dark) ---
+     e2b #12A594 · modal #BE7F00 · daytona #A855F7
+     Lightness band PASS · chroma PASS · CVD ΔE 14.1 · normal ΔE 20.2 · 3:1 PASS */
+  --e2b:       #12a594;
+  --modal:     #be7f00;
+  --daytona:   #a855f7;
+  --local:     #5d6b7d;
+  --e2b-lit:     #2fd3bf;
+  --modal-lit:   #f0a416;
+  --daytona-lit: #c98bff;
+  --local-lit:   #8fa0b3;
+
+  /* --- status: reserved, never reused as a series colour --- */
+  --good:     #3ddc84;
+  --warn:     #f5b642;
+  --serious:  #ff8a3d;
+  --critical: #ff4d5e;
+  --flag:     #ffd166;   /* session-best marker, F1 purple analogue */
+  --best:     #b47cff;
+
+  --grid: 4px;
+  --shadow-deep: 0 24px 60px -20px rgba(0, 0, 0, 0.9);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--void);
+  color: var(--ink);
+  font-family: var(--font-mono), ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Atmosphere: a faint scanline weave + vignette so flat black gets depth. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 100;
+  background-image:
+    repeating-linear-gradient(0deg, rgba(255,255,255,0.014) 0 1px, transparent 1px 3px);
+  mix-blend-mode: screen;
+}
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 99;
+  background: radial-gradient(120% 90% at 50% -10%, transparent 40%, rgba(0,0,0,0.55) 100%);
+}
+
+.display {
+  font-family: var(--font-display), "Arial Narrow", sans-serif;
+  font-stretch: condensed;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}
+
+.num { font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+
+/* ---------------------------------------------------------------- layout */
+
+.shell {
+  max-width: 1560px;
+  margin: 0 auto;
+  padding: 0 28px 96px;
+}
+
+/* ---------------------------------------------------------------- header */
+
+.masthead {
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  background: linear-gradient(180deg, var(--void) 72%, rgba(5,7,10,0.86) 100%);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--rule-strong);
+  margin-bottom: 26px;
+}
+.masthead-inner {
+  max-width: 1560px;
+  margin: 0 auto;
+  padding: 18px 28px 14px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 32px;
+  flex-wrap: wrap;
+}
+
+/* Start-lights: five lamps, the motorsport "lights out" cue. */
+.lights { display: flex; gap: 5px; margin-bottom: 10px; }
+.lamp {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--critical);
+  box-shadow: 0 0 10px rgba(255,77,94,0.75);
+  animation: lampOut 2.4s ease-in-out infinite;
+}
+.lamp:nth-child(2) { animation-delay: 0.12s; }
+.lamp:nth-child(3) { animation-delay: 0.24s; }
+.lamp:nth-child(4) { animation-delay: 0.36s; }
+.lamp:nth-child(5) { animation-delay: 0.48s; }
+@keyframes lampOut {
+  0%, 55% { opacity: 1; }
+  70%, 100% { opacity: 0.16; box-shadow: none; }
+}
+
+.wordmark {
+  font-size: clamp(30px, 4.4vw, 58px);
+  line-height: 0.86;
+  margin: 0;
+  letter-spacing: 0.005em;
+  background: linear-gradient(178deg, #ffffff 8%, #b6c6d8 52%, #64748b 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.wordmark em {
+  font-style: normal;
+  display: block;
+  font-size: 0.3em;
+  letter-spacing: 0.42em;
+  color: var(--ink-3);
+  background: none;
+  -webkit-text-fill-color: var(--ink-3);
+  margin-top: 9px;
+}
+
+.readouts { display: flex; gap: 0; align-items: stretch; }
+.readout {
+  padding: 0 20px;
+  border-left: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  min-width: 112px;
+}
+.readout:first-child { border-left: none; }
+.readout-label {
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  margin-bottom: 4px;
+  white-space: nowrap;
+}
+.readout-value { font-size: 25px; line-height: 1; color: var(--ink); }
+.readout-value.cost { color: var(--flag); }
+.readout-sub { font-size: 10px; color: var(--ink-3); margin-top: 4px; }
+
+.live {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--good);
+}
+.live-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--good);
+  box-shadow: 0 0 9px var(--good);
+  animation: breathe 1.7s ease-in-out infinite;
+}
+.live.stale, .live.stale .live-dot { color: var(--ink-3); background: var(--ink-3); box-shadow: none; }
+@keyframes breathe { 0%,100% { opacity: 1; } 50% { opacity: 0.28; } }
+
+/* ---------------------------------------------------------------- panels */
+
+.panel {
+  background:
+    linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--rule);
+  position: relative;
+  margin-bottom: 22px;
+}
+/* Corner ticks — instrument-panel detailing. */
+.panel::before, .panel::after {
+  content: ""; position: absolute; width: 7px; height: 7px;
+  border-color: var(--rule-strong); border-style: solid;
+}
+.panel::before { top: -1px; left: -1px; border-width: 1px 0 0 1px; }
+.panel::after  { bottom: -1px; right: -1px; border-width: 0 1px 1px 0; }
+
+.panel-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap;
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--rule);
+  background: rgba(255,255,255,0.012);
+}
+.panel-title { font-size: 15px; margin: 0; color: var(--ink); }
+.panel-title .idx {
+  color: var(--ink-4); margin-right: 10px; font-size: 12px;
+  letter-spacing: 0.12em;
+}
+.panel-meta { font-size: 10px; color: var(--ink-3); letter-spacing: 0.08em; }
+.panel-body { padding: 16px 18px 20px; }
+
+.blurb {
+  font-size: 11.5px; color: var(--ink-3); margin: 0 0 16px;
+  max-width: 76ch; line-height: 1.6;
+}
+
+/* ------------------------------------------------------- timing tower */
+
+.tower { width: 100%; border-collapse: collapse; }
+.tower thead th {
+  font-size: 9px; letter-spacing: 0.17em; text-transform: uppercase;
+  color: var(--ink-4); font-weight: 500; text-align: right;
+  padding: 0 10px 9px; border-bottom: 1px solid var(--rule);
+  white-space: nowrap;
+}
+.tower thead th.l { text-align: left; }
+.tower tbody tr {
+  border-bottom: 1px solid rgba(150,180,210,0.06);
+  animation: rowIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.tower tbody tr:hover { background: rgba(150,180,210,0.045); }
+@keyframes rowIn { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+.tower td { padding: 11px 10px; text-align: right; vertical-align: middle; }
+.tower td.l { text-align: left; }
+
+.pos {
+  width: 30px; font-size: 16px; color: var(--ink-3);
+  text-align: center !important; padding-right: 0 !important;
+}
+.pos.p1 { color: var(--flag); }
+
+/* The livery stripe is the identity anchor — colour + name together. */
+.competitor { display: flex; align-items: center; gap: 11px; }
+.livery { width: 4px; height: 26px; flex: none; border-radius: 1px; }
+.competitor-name { font-size: 15px; letter-spacing: 0.05em; }
+.competitor-sub { font-size: 9px; color: var(--ink-4); letter-spacing: 0.1em; margin-top: 1px; }
+
+.t-primary { font-size: 17px; }
+.t-secondary { font-size: 13px; color: var(--ink-2); }
+.t-muted { font-size: 12px; color: var(--ink-3); }
+.gap { font-size: 12px; color: var(--ink-3); }
+.gap.leader { color: var(--flag); }
+
+.chip {
+  display: inline-block; font-size: 9px; letter-spacing: 0.14em;
+  text-transform: uppercase; padding: 3px 7px;
+  border: 1px solid currentColor; line-height: 1;
+}
+.chip.ok      { color: var(--good); }
+.chip.partial { color: var(--warn); }
+.chip.error   { color: var(--critical); }
+.chip.dns     { color: var(--ink-4); }
+
+.dnsrow td { color: var(--ink-4); font-size: 11px; }
+
+/* Sector bar — proportional magnitude, 4px rounded end, baseline anchored. */
+.bar-track {
+  position: relative; height: 7px; background: rgba(150,180,210,0.09);
+  width: 100%; min-width: 90px; overflow: hidden;
+}
+.bar-fill {
+  position: absolute; inset: 0 auto 0 0; border-radius: 0 3px 3px 0;
+  animation: barGrow 0.85s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes barGrow { from { transform: scaleX(0); transform-origin: left; } to { transform: none; } }
+
+/* ------------------------------------------------------- lap trace */
+
+.laps { display: grid; gap: 12px; }
+.lap-row { display: grid; grid-template-columns: 128px 1fr; gap: 14px; align-items: center; }
+.lap-label { display: flex; align-items: center; gap: 9px; font-size: 12px; }
+
+/* ------------------------------------------------------- escape matrix */
+
+.matrix { width: 100%; border-collapse: separate; border-spacing: 2px; }
+.matrix th {
+  font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--ink-4); font-weight: 500; padding: 6px 10px; text-align: left;
+}
+.matrix th.probe-h { width: 168px; }
+.matrix td { padding: 0; }
+
+.cell {
+  padding: 10px 12px; min-height: 52px;
+  border: 1px solid var(--rule);
+  background: var(--surface-3);
+  display: flex; flex-direction: column; gap: 4px; justify-content: center;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.cell:hover { border-color: var(--rule-strong); transform: translateY(-1px); }
+.cell-outcome {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase;
+}
+.cell-glyph { font-size: 11px; line-height: 1; }
+.cell-evidence { font-size: 10.5px; color: var(--ink-3); line-height: 1.4; }
+
+/* Outcome states are STATES, not scores — each carries a glyph + word,
+   so identity never rests on colour alone. */
+.o-allowed  { color: var(--warn); }
+.o-blocked  { color: var(--e2b-lit); }
+.o-killed   { color: var(--critical); }
+.o-partial  { color: var(--serious); }
+.o-unknown  { color: var(--ink-3); }
+
+.probe-name { font-size: 11.5px; color: var(--ink-2); letter-spacing: 0.04em; }
+.probe-desc { font-size: 9.5px; color: var(--ink-4); margin-top: 2px; }
+
+.machines { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 2px; margin-top: 16px; }
+.machine { border: 1px solid var(--rule); background: var(--surface-3); padding: 12px 14px; }
+.machine-name { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 8px; }
+.machine dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 10.5px; }
+.machine dt { color: var(--ink-4); letter-spacing: 0.08em; }
+.machine dd { margin: 0; color: var(--ink-2); text-align: right; }
+
+/* ------------------------------------------------------- distribution */
+
+.dist-legend { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 14px; }
+.legend-item { display: flex; align-items: center; gap: 7px; font-size: 10.5px; color: var(--ink-2); }
+.legend-swatch { width: 11px; height: 11px; border-radius: 2px; }
+
+/* ------------------------------------------------------- misc */
+
+.grid-2 { display: grid; grid-template-columns: 1.35fr 1fr; gap: 22px; align-items: start; }
+@media (max-width: 1080px) { .grid-2 { grid-template-columns: 1fr; } }
+
+.ticker { display: grid; gap: 1px; }
+.tick {
+  display: grid; grid-template-columns: 78px 1fr auto auto;
+  gap: 14px; align-items: center;
+  padding: 7px 12px; background: var(--surface-3); font-size: 10.5px;
+}
+.tick-task { letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink); font-size: 10px; }
+.tick-id { color: var(--ink-4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tick-cost { color: var(--flag); }
+
+.empty {
+  padding: 70px 24px; text-align: center; color: var(--ink-3);
+  border: 1px dashed var(--rule); font-size: 12px; line-height: 1.9;
+}
+.empty code {
+  color: var(--e2b-lit); background: rgba(18,165,148,0.09);
+  padding: 3px 8px; border: 1px solid rgba(18,165,148,0.25);
+}
+
+.footnote { font-size: 10px; color: var(--ink-4); margin-top: 14px; line-height: 1.7; }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0); clip-path: inset(50%);
+  white-space: nowrap; border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}
+
+/* ---------------------------------------------------- range (min–p95) bar */
+
+.range { position: relative; height: 18px; width: 100%; min-width: 120px; }
+.range-axis {
+  position: absolute; left: 0; right: 0; top: 50%;
+  height: 1px; background: rgba(150,180,210,0.12);
+}
+.range-band {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  height: 6px; border-radius: 3px; opacity: 0.5;
+  animation: barGrow 0.85s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.range-cap {
+  position: absolute; top: 50%; transform: translate(-50%, -50%);
+  width: 2px; height: 11px; border-radius: 1px; opacity: 0.9;
+}
+.range-median {
+  position: absolute; top: 50%; transform: translate(-50%, -50%);
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--ink); box-shadow: 0 0 0 2px var(--surface);
+}
+
+/* Machine cards read as spec plates, not afterthoughts. */
+.machine { padding: 14px 16px; }
+.machine-name { font-size: 14px; margin-bottom: 10px; letter-spacing: 0.08em; }
+.machine dl { font-size: 11.5px; gap: 5px 14px; }
+.machine dt { color: var(--ink-3); font-size: 9.5px; letter-spacing: 0.12em; align-self: center; }
+.machine dd { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* -------------------------------------------------- horizontal containment
+   Wide tables scroll inside their own rail; the page body never scrolls
+   sideways. */
+.scroll-x {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule-strong) transparent;
+  padding-bottom: 2px;
+}
+.scroll-x::-webkit-scrollbar { height: 6px; }
+.scroll-x::-webkit-scrollbar-track { background: rgba(150,180,210,0.05); }
+.scroll-x::-webkit-scrollbar-thumb { background: var(--rule-strong); }
+.scroll-x .tower { min-width: 900px; }
+
+.competitor-sub { white-space: nowrap; }
+.tower td { white-space: nowrap; }
+.tower td.l { white-space: normal; }
+
+/* chart wells need room for the axis caption */
+.chart-well { padding-bottom: 6px; }
+.scroll-x .matrix { min-width: 780px; }
+
+/* ------------------------------------------------------- step breakdown */
+
+.steps { display: grid; gap: 14px; }
+.step-row { display: grid; grid-template-columns: 128px 1fr; gap: 14px; align-items: center; }
+.step-track {
+  display: flex; height: 30px; min-width: 40px;
+  background: rgba(150,180,210,0.06);
+  gap: 2px;   /* 2px surface gap between stacked segments */
+}
+.step-seg {
+  position: relative; min-width: 2px; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  transition: filter 0.12s;
+}
+.step-seg:hover { filter: brightness(1.5); }
+.step-tag {
+  font-size: 9px; letter-spacing: 0.06em; color: var(--void);
+  white-space: nowrap; padding: 0 5px; font-weight: 600;
+}
+.subhead {
+  font-size: 11px; margin: 0 0 14px; color: var(--ink-3);
+  letter-spacing: 0.18em; text-transform: uppercase; font-weight: 500;
+}

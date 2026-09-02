@@ -7,11 +7,11 @@ time, SDK ergonomics, and cost.
 TypeScript orchestrator + dashboard; the agent tasks themselves run Python
 inside the sandboxes.
 
-> **Status: Phase 2 complete.** All three adapters (E2B, Modal, Daytona) and all
+> **Status: Phase 3 complete — the project is done.** All three adapters (E2B, Modal, Daytona) and all
 > four races (SPRINT, MARATHON, ESCAPE ROOM, RELAY) are implemented and have been
 > run end to end against **real infrastructure on all three providers** — see
 > [Measured results](#measured-results). Zero orphaned sandboxes across ~100
-> created. The Next.js dashboard is Phase 3.
+> created. The live dashboard is built and reads `results/` as races land.
 
 ---
 
@@ -43,10 +43,54 @@ node packages/cli/dist/index.js race --task sprint --providers local --iteration
 | --- | --- |
 | `packages/core` | Provider abstraction, instrumentation, tasks, race runner |
 | `packages/cli` | `sgp` CLI — run races, print result tables |
-| `packages/dashboard` | Next.js live dashboard *(Phase 3)* |
+| `packages/dashboard` | Next.js live telemetry dashboard |
 | `providers/modal_sidecar` | Python sidecar for Modal's Python-first SDK *(Phase 2)* |
 | `results/` | One append-only JSON file per race run, schema-versioned |
 | `pricing.json` | Editable $/vCPU-hr rates used for the cost column |
+
+---
+
+## The dashboard
+
+```bash
+pnpm dashboard      # http://localhost:4100
+```
+
+A pit-wall telemetry board that reads `results/` and repaints as races land —
+start a race in one terminal and watch it appear without a reload.
+
+| Panel | What it shows |
+| --- | --- |
+| **Masthead** | Races logged, cumulative sandbox seconds, errors captured, and a running cost counter that eases to each new total |
+| **Timing tower** | Classic motorsport leaderboard — position, livery, cold-start p50, gap to leader, p95, a min–p95 range bar with a median tick, total, alive seconds, cost, errors and retries |
+| **Cold start distribution** | A strip plot drawing *every* sample, not a histogram — with ~10 laps per provider, binning would hide exactly the tail outliers you care about |
+| **Lap times** | Per-provider sparklines on a shared vertical scale; failed laps are hollow and ringed |
+| **Where the time went** | For single-iteration races, a step breakdown instead of a one-point "distribution" — this is where Marathon's `pip install` dominance and its deliberately-red test segment show up |
+| **Escape room matrix** | provider × probe → outcome, plus a spec plate per provider showing the machine actually delivered |
+| **Race log** | Newest-first ticker of every run on disk |
+
+Implementation notes:
+
+- **Polling, not websockets.** The page polls `/api/results` every 2.5s, pauses
+  while the tab is hidden, and catches up immediately on refocus. The route is
+  `force-dynamic` so it always re-reads the directory.
+- **Dark-only, by design.** It is a telemetry screen; a light variant would be a
+  different product. Colours are CSS variables in one block if you want to fork it.
+- **The categorical palette is validated, not eyeballed.** Provider liveries
+  (e2b `#12A594`, modal `#BE7F00`, daytona `#A855F7`) pass a six-check colour
+  audit against the dark surface — lightness band, chroma floor, colour-blind
+  separation (ΔE 14.1 worst adjacent pair under protanopia/deuteranopia),
+  normal-vision separation (ΔE 20.2) and 3:1 contrast.
+- **Nothing depends on colour alone.** Every escape-room cell carries a glyph and
+  a word; charts carry direct labels and a legend; the distribution chart ships a
+  screen-reader table of the same numbers.
+- **Escape-room outcomes are states, not scores.** `allowed` is rendered as a
+  neutral caution, not a failure — it usually means "this is the provider's
+  documented default", and Modal's open network is configurable.
+
+> Don't run `pnpm --filter @sgp/dashboard build` while the dev server is running —
+> they share `.next` and the dev server will start returning 500s. Stop it first,
+> or `rm -rf packages/dashboard/.next` to recover.
 
 ---
 
